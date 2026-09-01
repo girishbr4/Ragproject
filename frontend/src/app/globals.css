@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body {
+    margin: 0;
+    padding: 0;
+    overscroll-behavior: none;
+  }
+
+  /* Hide scrollbars globally — matches Stitch design */
+  ::-webkit-scrollbar {
+    display: none;
+  }
+
+  * {
+    scrollbar-width: none;
+  }
+}
+
+@layer utilities {
+  /* Stitch animation delays */
+  .animation-delay-200 {
+    animation-delay: 200ms;
+  }
+  .animation-delay-400 {
+    animation-delay: 400ms;
+  }
+
+  /* Material Symbols font variant */
+  .material-symbols-outlined {
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  }
+
+  .material-symbols-filled {
+    font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  }
+}

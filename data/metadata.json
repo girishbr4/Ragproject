@@ -1,0 +1,88 @@
+{
+  "hdfc-mid-cap-fund-direct-growth": {
+    "source_url": "https://groww.in/mutual-funds/hdfc-mid-cap-fund-direct-growth",
+    "scrape_date": "2026-08-27",
+    "chunk_count": 78,
+    "scheme_name": "HDFC Mid Cap Fund Direct Growth",
+    "type": "web",
+    "fields_found": {
+      "expense_ratio": "0.74%",
+      "exit_load": "A fee payable to a mutual fund house for exiting a fund (fully or partially) before the completion of a specified period from the date of investment.",
+      "min_sip": "100",
+      "min_lumpsum": "100",
+      "risk": "Very High Risk",
+      "benchmark": "NIFTY Midcap 150 Total Return Index",
+      "fund_manager": "Chirag Setalvad",
+      "category": "Equity Mid Cap"
+    }
+  },
+  "hdfc-small-cap-fund-direct-growth": {
+    "source_url": "https://groww.in/mutual-funds/hdfc-small-cap-fund-direct-growth",
+    "scrape_date": "2026-08-27",
+    "chunk_count": 79,
+    "scheme_name": "HDFC Small Cap Fund Direct Growth",
+    "type": "web",
+    "fields_found": {
+      "expense_ratio": "0.75%",
+      "exit_load": "A fee payable to a mutual fund house for exiting a fund (fully or partially) before the completion of a specified period from the date of investment.",
+      "min_sip": "100",
+      "min_lumpsum": "100",
+      "risk": "Very High Risk",
+      "benchmark": "BSE 250 SmallCap Total Return Index",
+      "fund_manager": "Dhruv Muchhal",
+      "category": "Equity Small Cap"
+    }
+  },
+  "hdfc-gold-etf-fund-of-fund-direct-plan-growth": {
+    "source_url": "https://groww.in/mutual-funds/hdfc-gold-etf-fund-of-fund-direct-plan-growth",
+    "scrape_date": "2026-08-27",
+    "chunk_count": 66,
+    "scheme_name": "HDFC Gold ETF Fund of Fund Direct Plan Growth",
+    "type": "web",
+    "fields_found": {
+      "expense_ratio": "0.20%",
+      "exit_load": "A fee payable to a mutual fund house for exiting a fund (fully or partially) before the completion of a specified period from the date of investment.",
+      "min_sip": "100",
+      "min_lumpsum": "100",
+      "risk": "High Risk",
+      "benchmark": "Domestic Price of Gold",
+      "fund_manager": "Arun Agarwal",
+      "category": "Commodities Gold"
+    }
+  },
+  "hdfc-large-cap-fund-direct-growth": {
+    "source_url": "https://groww.in/mutual-funds/hdfc-large-cap-fund-direct-growth",
+    "scrape_date": "2026-08-27",
+    "chunk_count": 73,
+    "scheme_name": "HDFC Large Cap Fund Direct Growth",
+    "type": "web",
+    "fields_found": {
+      "expense_ratio": "1.02%",
+      "exit_load": "A fee payable to a mutual fund house for exiting a fund (fully or partially) before the completion of a specified period from the date of investment.",
+      "min_sip": "100",
+      "min_lumpsum": "100",
+      "risk": "Very High Risk",
+      "benchmark": "NIFTY 100 Total Return Index",
+      "fund_manager": "Rahul Baijal",
+      "category": "Equity Large Cap"
+    }
+  },
+  "hdfc-elss-tax-saver-fund-direct-plan-growth": {
+    "source_url": "https://groww.in/mutual-funds/hdfc-elss-tax-saver-fund-direct-plan-growth",
+    "scrape_date": "2026-08-27",
+    "chunk_count": 77,
+    "scheme_name": "HDFC ELSS Tax Saver Fund Direct Plan Growth",
+    "type": "web",
+    "fields_found": {
+      "expense_ratio": "1.19%",
+      "exit_load": "A fee payable to a mutual fund house for exiting a fund (fully or partially) before the completion of a specified period from the date of investment.",
+      "min_sip": "500",
+      "min_lumpsum": "500",
+      "risk": "Very High Risk",
+      "benchmark": "NIFTY 500 Total Return Index",
+      "fund_manager": "Amar Kalkundrikar",
+      "lock_in": "3Y Lock-in",
+      "category": "Equity ELSS"
+    }
+  }
+}
