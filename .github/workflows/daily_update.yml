@@ -1,0 +1,164 @@
+name: 🔄 Daily Fund Data Refresh
+
+on:
+  # ── Automatic: every day at 02:00 UTC (07:30 IST) ──────────────────────────
+  schedule:
+    - cron: "0 2 * * *"
+
+  # ── Manual: trigger from GitHub Actions UI or via API ───────────────────────
+  workflow_dispatch:
+    inputs:
+      scheme_url:
+        description: |
+          (Optional) Re-ingest a single scheme URL.
+          Leave blank to refresh ALL 5 HDFC schemes.
+        required: false
+        default: ""
+      dry_run:
+        description: "Dry run — scrape only, do NOT update ChromaDB or commit"
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  # ============================================================
+  # JOB 1 — Run the ingestion pipeline
+  # ============================================================
+  daily-update:
+    name: Scrape → Embed → Refresh ChromaDB
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # ── 1. Checkout repo (full history so we can push back) ────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 2. Set up Python 3.11 ─────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"   # cache pip packages between runs
+
+      # ── 3. Install Python dependencies ───────────────────────────────────
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 4. Install Playwright browser (Chromium) ─────────────────────────
+      - name: Install Playwright Chromium
+        run: playwright install chromium --with-deps
+
+      # ── 5. Restore ChromaDB cache from previous run ───────────────────────
+      - name: Restore ChromaDB cache
+        uses: actions/cache@v4
+        with:
+          path: vector_store/chroma_db
+          key: chroma-db-${{ runner.os }}-${{ hashFiles('data/metadata.json') }}
+          restore-keys: |
+            chroma-db-${{ runner.os }}-
+
+      # ── 6. Run ingestion pipeline ─────────────────────────────────────────
+      - name: Run daily ingestion
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          SCHEME_URL="${{ github.event.inputs.scheme_url }}"
+          DRY_RUN="${{ github.event.inputs.dry_run }}"
+
+          ARGS=""
+          if [ -n "$SCHEME_URL" ]; then
+            ARGS="$ARGS --url \"$SCHEME_URL\""
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+
+          eval python ingest_all.py $ARGS
+
+      # ── 7. Upload ChromaDB + metadata as a 7-day artifact ─────────────────
+      - name: Upload vector store artifact
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: chroma-db-${{ github.run_number }}
+          path: |
+            vector_store/chroma_db/
+            data/metadata.json
+          retention-days: 7
+
+      # ── 8. Commit updated metadata.json back to the repo ──────────────────
+      - name: Commit metadata update
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/metadata.json
+          git diff --cached --quiet || git commit \
+            -m "chore(scheduler): daily fund data refresh $(date -u +%Y-%m-%d) [skip ci]"
+          git push
+
+      # ── 9. Write GitHub Step Summary (always runs) ─────────────────────────
+      - name: Write job summary
+        if: always()
+        run: |
+          python - <<'PYEOF'
+          import json, os, sys
+          from pathlib import Path
+
+          meta_path = Path("data/metadata.json")
+          if not meta_path.exists():
+              print("metadata.json not found — skipping summary.", file=sys.stderr)
+              sys.exit(0)
+
+          meta = json.loads(meta_path.read_text())
+          lines = [
+              "## 📊 Daily Fund Refresh Summary\n",
+              "| Scheme | Status | Chunks | Scrape Date |",
+              "|---|---|---|---|",
+          ]
+          for slug, info in meta.items():
+              status  = "✅" if info.get("scrape_date") else "❌"
+              chunks  = info.get("chunk_count", "?")
+              date    = info.get("scrape_date", "N/A")
+              lines.append(f"| {slug} | {status} | {chunks} | {date} |")
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              Path(summary_path).write_text("\n".join(lines))
+          else:
+              print("\n".join(lines))
+          PYEOF
+
+  # ============================================================
+  # JOB 2 — Auto-create GitHub Issue on failure
+  # ============================================================
+  notify-on-failure:
+    name: Notify on failure
+    runs-on: ubuntu-latest
+    needs: daily-update
+    if: failure()
+    steps:
+      - name: Create failure issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const date = new Date().toISOString().slice(0, 10);
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              title: `❌ Daily fund refresh failed — ${date}`,
+              body: [
+                `The scheduled daily ChromaDB refresh failed on **${date}**.`,
+                ``,
+                `**Workflow run:** ${runUrl}`,
+                ``,
+                `Please check the run logs and re-trigger manually once fixed:`,
+                `- Go to **Actions → 🔄 Daily Fund Data Refresh → Run workflow**`,
+              ].join("\n"),
+              labels: ["bug", "scheduler"],
+            });

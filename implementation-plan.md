@@ -18,6 +18,7 @@ Phase 3 ─ Embedding & Vector Store             (Day 4)
 Phase 4 ─ RAG Query Pipeline                   (Day 5–6)
 Phase 5 ─ Frontend UI                          (Day 7)
 Phase 6 ─ Testing, Hardening & Documentation   (Day 8–9)
+Phase 7 ─ Daily Scheduler & Auto-Update        (Day 10)
 ```
 
 ---
@@ -50,11 +51,17 @@ ragchatbot/
 │   ├── llm_client.py
 │   ├── response_formatter.py
 │   └── refusal_handler.py
+├── scheduler/
+│   ├── daily_update.py      ← Orchestrates the daily scrape → embed → update cycle
+│   ├── scheduler_runner.py  ← APScheduler process entry point
+│   └── notifier.py          ← Optional: sends email/Slack alert on run status
 ├── ui/
 │   ├── app.py
 │   └── static/
 ├── vector_store/
 │   └── chroma_db/
+├── logs/
+│   └── scheduler.log        ← Rolling log file for all scheduler runs
 ├── config.py
 ├── requirements.txt
 ├── problemstatement.md
@@ -1162,6 +1169,457 @@ Include:
 
 ---
 
+## Phase 7 — Daily Scheduler & Auto-Update Pipeline (GitHub Actions)
+
+**Goal:** Automatically run the full scrape → chunk → embed → ChromaDB refresh cycle every day using **GitHub Actions**, so the RAG knowledge base always reflects the latest NAV, expense ratios, and fund facts from Groww — with zero infrastructure cost and full run history in the GitHub UI.
+
+> [!IMPORTANT]
+> The update is **incremental**: per-scheme chunks are deleted from ChromaDB and re-inserted with fresh data. The workflow uploads the updated `data/metadata.json` and `vector_store/` as a GitHub Actions artifact **and** commits `metadata.json` back to the repo so Railway/Vercel always knows the last successful scrape date.
+
+### 7.1 Folder & File Changes
+
+```
+ragchatbot/
+├── .github/
+│   └── workflows/
+│       ├── daily_update.yml      ← [NEW] Daily cron + manual trigger
+│       └── manual_ingest.yml     ← [NEW] On-demand single-scheme re-ingest
+├── scheduler/
+│   └── daily_update.py           ← Incremental ChromaDB refresh (reused by GH Actions)
+├── ingest_all.py                  ← Entry point called by the workflow
+└── data/
+    └── metadata.json             ← Committed back after each run
+```
+
+### 7.2 Daily Update Orchestrator (`scheduler/daily_update.py`)
+
+This module is called by `ingest_all.py` and reuses the existing ingestion stack. It performs an incremental per-scheme refresh:
+
+```python
+# scheduler/daily_update.py
+import logging
+import datetime
+import json
+from pathlib import Path
+
+import chromadb
+from ingestion.scraper  import scrape_scheme
+from ingestion.chunker  import chunk_document
+from ingestion.embedder import ingest_chunks
+from config import SCHEME_URLS, CHROMA_DB_PATH
+
+logger = logging.getLogger("scheduler")
+METADATA_PATH = Path("data/metadata.json")
+
+
+def _scheme_slug(url: str) -> str:
+    """Derive a stable slug from the Groww URL tail segment."""
+    return url.rstrip("/").split("/")[-1]
+
+
+def _delete_scheme_chunks(collection, scheme_slug: str):
+    """Delete stale ChromaDB documents for this scheme before re-ingesting."""
+    existing = collection.get(where={"source_url": {"$contains": scheme_slug}})
+    if existing["ids"]:
+        collection.delete(ids=existing["ids"])
+        logger.info("Deleted %d stale chunks for %s", len(existing["ids"]), scheme_slug)
+
+
+def run_daily_update(urls: list[str] | None = None) -> dict:
+    """
+    Orchestrates the full daily refresh for the given URLs (default: all SCHEME_URLS):
+      1. Scrape each scheme URL from Groww
+      2. Chunk and classify the fresh content
+      3. Delete stale ChromaDB entries for that scheme
+      4. Embed and insert fresh chunks
+      5. Update metadata.json with new scrape_date and chunk_count
+    Returns a summary dict printed to stdout (captured by GitHub Actions logs).
+    """
+    urls = urls or SCHEME_URLS
+    client     = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+    collection = client.get_or_create_collection("mutual_fund_facts")
+    summary    = {"run_date": datetime.date.today().isoformat(), "schemes": {}}
+    metadata   = json.loads(METADATA_PATH.read_text()) if METADATA_PATH.exists() else {}
+
+    for url in urls:
+        slug = _scheme_slug(url)
+        logger.info("[%s] Starting scrape …", slug)
+        try:
+            scraped = scrape_scheme(url)
+            chunks  = chunk_document(
+                text=scraped["content"],
+                source_url=url,
+                scrape_date=scraped["scraped_at"],
+                scheme_name=scraped["scheme_name"],
+            )
+            _delete_scheme_chunks(collection, slug)
+            ingest_chunks(chunks, scheme_slug=slug)
+
+            non_noise = [c for c in chunks if c["chunk_type"] != "noise"]
+            metadata[slug] = {
+                "source_url":   url,
+                "scrape_date":  scraped["scraped_at"],
+                "chunk_count":  len(non_noise),
+                "type":         "web",
+                "last_updated": datetime.datetime.utcnow().isoformat() + "Z",
+            }
+            summary["schemes"][slug] = {"status": "ok", "chunks": len(non_noise)}
+            logger.info("[%s] ✅  Ingested %d chunks.", slug, len(non_noise))
+
+        except Exception as exc:
+            logger.error("[%s] ❌  Failed: %s", slug, exc, exc_info=True)
+            summary["schemes"][slug] = {"status": "error", "error": str(exc)}
+
+    METADATA_PATH.write_text(json.dumps(metadata, indent=2))
+    logger.info("Daily update complete: %s", summary)
+    return summary
+```
+
+### 7.3 Primary Scheduler — GitHub Actions Workflow
+
+#### 7.3.1 Daily Cron Workflow (`.github/workflows/daily_update.yml`)
+
+> [!IMPORTANT]
+> This is the **primary, recommended** scheduler. It runs on GitHub's hosted runners at 02:00 UTC daily (07:30 IST). No server or APScheduler process needed. Run history, logs, and artifacts are all visible in the GitHub Actions tab.
+
+```yaml
+name: 🔄 Daily Fund Data Refresh
+
+on:
+  # ── Automatic: every day at 02:00 UTC (07:30 IST) ──────────────────────────
+  schedule:
+    - cron: "0 2 * * *"
+
+  # ── Manual: trigger from GitHub UI or via API ───────────────────────────────
+  workflow_dispatch:
+    inputs:
+      scheme_url:
+        description: |
+          (Optional) Re-ingest a single scheme URL.
+          Leave blank to refresh ALL 5 HDFC schemes.
+        required: false
+        default: ""
+      dry_run:
+        description: "Dry run — scrape only, do NOT update ChromaDB or commit"
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  # ============================================================
+  # JOB 1 — Run the ingestion pipeline
+  # ============================================================
+  daily-update:
+    name: Scrape → Embed → Refresh ChromaDB
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # ── 1. Checkout repo (with full history for git push) ──────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # full history so we can push back
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 2. Set up Python ───────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"            # cache site-packages between runs
+
+      # ── 3. Install dependencies ────────────────────────────────────────────
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 4. Restore cached ChromaDB from previous run ───────────────────────
+      - name: Restore ChromaDB cache
+        uses: actions/cache@v4
+        with:
+          path: vector_store/chroma_db
+          key: chroma-db-${{ runner.os }}-${{ hashFiles('data/metadata.json') }}
+          restore-keys: |
+            chroma-db-${{ runner.os }}-
+
+      # ── 5. Run ingestion ───────────────────────────────────────────────────
+      - name: Run daily ingestion
+        env:
+          GROQ_API_KEY:  ${{ secrets.GROQ_API_KEY }}
+          SCHEME_URL:    ${{ github.event.inputs.scheme_url }}
+          DRY_RUN:       ${{ github.event.inputs.dry_run }}
+        run: |
+          python ingest_all.py \
+            ${SCHEME_URL:+--url "$SCHEME_URL"} \
+            ${DRY_RUN:+--dry-run}
+
+      # ── 6. Upload ChromaDB + metadata as artifact ──────────────────────────
+      - name: Upload vector store artifact
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: chroma-db-${{ github.run_number }}
+          path: |
+            vector_store/chroma_db/
+            data/metadata.json
+          retention-days: 7       # keep the last 7 daily snapshots
+
+      # ── 7. Commit updated metadata.json back to repo ───────────────────────
+      - name: Commit metadata update
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/metadata.json
+          git diff --cached --quiet || git commit \
+            -m "chore(scheduler): daily fund data refresh $(date -u +%Y-%m-%d) [skip ci]"
+          git push
+
+      # ── 8. Write GitHub Step Summary ───────────────────────────────────────
+      - name: Write job summary
+        if: always()
+        run: |
+          python - <<'EOF'
+          import json, os
+          from pathlib import Path
+          meta = json.loads(Path("data/metadata.json").read_text())
+          lines = ["## 📊 Daily Fund Refresh Summary\n",
+                   "| Scheme | Status | Chunks | Scrape Date |",
+                   "|---|---|---|---|"]
+          for slug, info in meta.items():
+              status = "✅" if info.get("scrape_date") else "❌"
+              lines.append(
+                f"| {slug} | {status} | {info.get('chunk_count','?')} | {info.get('scrape_date','N/A')} |"
+              )
+          summary_path = os.environ["GITHUB_STEP_SUMMARY"]
+          Path(summary_path).write_text("\n".join(lines))
+          EOF
+
+  # ============================================================
+  # JOB 2 — Notify on failure (runs only when job 1 fails)
+  # ============================================================
+  notify-on-failure:
+    name: Notify on failure
+    runs-on: ubuntu-latest
+    needs: daily-update
+    if: failure()
+    steps:
+      - name: Send failure notification
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              title: `❌ Daily fund refresh failed — ${new Date().toISOString().slice(0,10)}`,
+              body:  `The scheduled daily ChromaDB refresh failed.\n\n**Workflow run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              labels: ["bug", "scheduler"],
+            });
+```
+
+#### 7.3.2 Manual Single-Scheme Workflow (`.github/workflows/manual_ingest.yml`)
+
+Use this to re-ingest a specific scheme on demand (e.g., after a Groww page layout change):
+
+```yaml
+name: ♻️ Manual Single-Scheme Re-Ingest
+
+on:
+  workflow_dispatch:
+    inputs:
+      scheme_url:
+        description: "Full Groww scheme URL to re-ingest"
+        required: true
+        default: "https://groww.in/mutual-funds/hdfc-mid-cap-fund-direct-growth"
+
+jobs:
+  reingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: Restore ChromaDB cache
+        uses: actions/cache@v4
+        with:
+          path: vector_store/chroma_db
+          key: chroma-db-${{ runner.os }}-${{ hashFiles('data/metadata.json') }}
+          restore-keys: chroma-db-${{ runner.os }}-
+
+      - name: Re-ingest single scheme
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python ingest_all.py --url "${{ github.event.inputs.scheme_url }}"
+
+      - name: Commit metadata
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/metadata.json
+          git diff --cached --quiet || git commit \
+            -m "chore(scheduler): manual re-ingest ${{ github.event.inputs.scheme_url }} [skip ci]"
+          git push
+```
+
+### 7.4 `ingest_all.py` — CLI Entry Point
+
+Update `ingest_all.py` to accept `--url` and `--dry-run` flags so the GitHub Actions workflow can target a single scheme or skip writes:
+
+```python
+# ingest_all.py
+import argparse
+import logging
+from scheduler.daily_update import run_daily_update
+from config import SCHEME_URLS
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+
+def main():
+    parser = argparse.ArgumentParser(description="HDFC Fund data ingestion pipeline")
+    parser.add_argument(
+        "--url", default="",
+        help="Re-ingest a single scheme URL. Omit to refresh all schemes."
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Scrape and chunk only — do not write to ChromaDB or metadata.json."
+    )
+    args = parser.parse_args()
+
+    urls = [args.url] if args.url else SCHEME_URLS
+    if args.dry_run:
+        logging.info("DRY RUN — no ChromaDB writes.")
+        # just scrape and print chunk counts
+        from ingestion.scraper import scrape_scheme
+        from ingestion.chunker import chunk_document
+        for url in urls:
+            scraped = scrape_scheme(url)
+            chunks  = chunk_document(
+                text=scraped["content"],
+                source_url=url,
+                scrape_date=scraped["scraped_at"],
+                scheme_name=scraped["scheme_name"],
+            )
+            non_noise = [c for c in chunks if c["chunk_type"] != "noise"]
+            logging.info("%s → %d non-noise chunks (dry run)", url, len(non_noise))
+    else:
+        run_daily_update(urls=urls)
+
+if __name__ == "__main__":
+    main()
+```
+
+### 7.5 GitHub Repository Secrets Required
+
+Before the workflow can run, add these secrets in **GitHub → Settings → Secrets → Actions**:
+
+| Secret | Value | Where used |
+|---|---|---|
+| `GROQ_API_KEY` | Your Groq API key | `ingest_all.py` LLM calls (if any during ingest) |
+
+> [!NOTE]
+> `GITHUB_TOKEN` is automatically provided by GitHub Actions — no manual setup needed for the commit-back step.
+
+### 7.6 ChromaDB Persistence Strategy
+
+GitHub Actions runners are ephemeral — the ChromaDB is rebuilt on every run using `actions/cache`:
+
+| Step | Mechanism | Detail |
+|---|---|---|
+| **Restore** | `actions/cache@v4` | Restores prior `vector_store/chroma_db/` from cache keyed on `metadata.json` hash |
+| **Update** | `scheduler/daily_update.py` | Incremental — deletes stale chunks, inserts fresh ones |
+| **Persist** | `actions/upload-artifact@v4` | 7-day artifact snapshot of the full ChromaDB after each run |
+| **Railway sync** | Railway deploy hook (optional) | After a successful run, trigger a Railway redeploy to pick up the latest `metadata.json` from git |
+
+> [!WARNING]
+> Do **not** commit `vector_store/chroma_db/` binary files to git — they can grow large. The artifact upload handles snapshots. The cache + incremental approach keeps runner times under 5 minutes per run.
+
+### 7.7 Stale-Data Guard (Runtime Awareness)
+
+The RAG pipeline warns users in-chat when it is serving data older than `STALE_DATA_THRESHOLD_DAYS`. Add a helper in `pipeline/response_formatter.py`:
+
+```python
+import datetime
+from config import STALE_DATA_THRESHOLD_DAYS
+
+def _is_stale(date_str: str) -> bool:
+    """Return True if scrape_date is more than STALE_DATA_THRESHOLD_DAYS old."""
+    try:
+        return (datetime.date.today() - datetime.date.fromisoformat(date_str)).days \
+               > STALE_DATA_THRESHOLD_DAYS
+    except (ValueError, TypeError):
+        return False
+
+def format_response(raw: str, source_url: str, date: str) -> str:
+    # ... existing formatting logic ...
+    if _is_stale(date):
+        trimmed += "\n> ⚠️ Data may be outdated — next automatic GitHub Actions refresh scheduled tonight."
+    trimmed += "\n\n> Facts-only. No investment advice."
+    return trimmed
+```
+
+`STALE_DATA_THRESHOLD_DAYS` is set in `config.py`:
+
+```python
+STALE_DATA_THRESHOLD_DAYS = int(os.getenv("STALE_DATA_THRESHOLD_DAYS", "2"))
+```
+
+### 7.8 Local Fallback (Dev Only)
+
+For local development without GitHub Actions, run ingestion directly:
+
+```bash
+# Refresh all 5 schemes (ad-hoc)
+python ingest_all.py
+
+# Refresh a single scheme
+python ingest_all.py --url "https://groww.in/mutual-funds/hdfc-elss-tax-saver-fund-direct-plan-growth"
+
+# Dry-run — scrape only, no ChromaDB writes
+python ingest_all.py --dry-run
+```
+
+Alternatively, use Windows Task Scheduler for local automation:
+```powershell
+schtasks /create /tn "HDFCFundDailyUpdate" /tr "python G:\Ragchatbot\ingest_all.py" /sc daily /st 09:00 /f
+```
+
+### 7.9 Monitoring & Observability
+
+| What | Where | How to access |
+|---|---|---|
+| Run history & logs | GitHub → Actions tab | Every cron and manual run listed with full logs |
+| Step summary table | GitHub Actions run page → Summary | Per-scheme ✅/❌ status + chunk counts |
+| ChromaDB snapshot | GitHub Actions → Artifacts | Last 7 daily snapshots downloadable |
+| `metadata.json` | Committed to repo after each run | `git log -- data/metadata.json` shows history |
+| Failure alert | Auto-created GitHub Issue (labelled `bug`, `scheduler`) | Assigned to repo collaborators |
+| Stale-data warning | In-chat UI (response footer) | Visible to end users after 2 missed runs |
+
+### ✅ Phase 7 Deliverable
+- `.github/workflows/daily_update.yml` committed and **enabled** in GitHub Actions
+- `.github/workflows/manual_ingest.yml` committed for on-demand re-ingest
+- `GROQ_API_KEY` secret added to GitHub repository settings
+- First manual `workflow_dispatch` run completes successfully (all 5 schemes ✅)
+- `data/metadata.json` `scrape_date` fields updated after the run
+- GitHub Step Summary shows per-scheme table for every run
+- ChromaDB artifact uploaded and retained for 7 days
+- Stale-data warning verified in UI when `scrape_date` is > 2 days old
+- Failure auto-issue creation tested by temporarily breaking one scheme URL
+
+---
+
 ## Summary Timeline
 
 | Phase | Focus Area | Duration | Deliverable |
@@ -1172,7 +1630,8 @@ Include:
 | **4** | RAG Query Pipeline | Day 5–6 | End-to-end `answer()` function working |
 | **5** | Frontend UI (Next.js + FastAPI) | Day 7–8 | Next.js app at localhost:3000 → FastAPI at localhost:8000 |
 | **6** | Testing & Documentation | Day 8–9 | All tests pass, README complete |
-| **7** | Production Deployment | Day 10 | Railway backend live + Vercel frontend live (see [deployment-plan.md](deployment-plan.md)) |
+| **7** | Daily Scheduler (GitHub Actions) | Day 10 | Workflows live, daily cron firing, ChromaDB auto-refreshed |
+| **8** | Production Deployment | Day 11 | Railway backend + worker live, Vercel frontend live (see [deployment-plan.md](deployment-plan.md)) |
 
 ---
 
@@ -1185,6 +1644,9 @@ Include:
 | Valid source citation in every response | Phase 4 (Formatter §4.5) |
 | Proper refusal of advisory queries | Phase 4 (Classifier §4.1 + Refusal Handler §4.6) |
 | Clean, minimal, user-friendly UI | Phase 5 (Stitch design §5.2 → Next.js §5.3 + FastAPI §5.4) |
+| Always-fresh data (daily NAV / expense ratio updates) | Phase 7 (GitHub Actions cron §7.3.1 + Incremental ChromaDB update §7.2) |
+| On-demand single-scheme re-ingest | Phase 7 (manual_ingest.yml §7.3.2 + `ingest_all.py --url`) |
+| Stale-data transparency | Phase 7 (Stale-data guard §7.7 rendered in every response) |
 
 ---
 

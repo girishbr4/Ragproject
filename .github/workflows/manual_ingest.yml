@@ -1,0 +1,111 @@
+name: ♻️ Manual Single-Scheme Re-Ingest
+
+on:
+  workflow_dispatch:
+    inputs:
+      scheme_url:
+        description: "Full Groww scheme URL to re-ingest"
+        required: true
+        default: "https://groww.in/mutual-funds/hdfc-mid-cap-fund-direct-growth"
+      dry_run:
+        description: "Dry run — scrape only, do NOT update ChromaDB or commit"
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  reingest:
+    name: Re-Ingest Single Scheme
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 2. Python ────────────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # ── 3. Dependencies ──────────────────────────────────────────────────────
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 4. Playwright browser ────────────────────────────────────────────────
+      - name: Install Playwright Chromium
+        run: playwright install chromium --with-deps
+
+      # ── 5. Restore ChromaDB cache ────────────────────────────────────────────
+      - name: Restore ChromaDB cache
+        uses: actions/cache@v4
+        with:
+          path: vector_store/chroma_db
+          key: chroma-db-${{ runner.os }}-${{ hashFiles('data/metadata.json') }}
+          restore-keys: |
+            chroma-db-${{ runner.os }}-
+
+      # ── 6. Run single-scheme ingestion ───────────────────────────────────────
+      - name: Re-ingest scheme
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          DRY_RUN="${{ github.event.inputs.dry_run }}"
+          if [ "$DRY_RUN" = "true" ]; then
+            python ingest_all.py --url "${{ github.event.inputs.scheme_url }}" --dry-run
+          else
+            python ingest_all.py --url "${{ github.event.inputs.scheme_url }}"
+          fi
+
+      # ── 7. Commit metadata.json ──────────────────────────────────────────────
+      - name: Commit metadata update
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/metadata.json
+          git diff --cached --quiet || git commit \
+            -m "chore(scheduler): manual re-ingest $(echo '${{ github.event.inputs.scheme_url }}' | sed 's|.*/||') [skip ci]"
+          git push
+
+      # ── 8. Step Summary ──────────────────────────────────────────────────────
+      - name: Write job summary
+        if: always()
+        run: |
+          python - <<'PYEOF'
+          import json, os, sys
+          from pathlib import Path
+
+          url   = "${{ github.event.inputs.scheme_url }}"
+          slug  = url.rstrip("/").split("/")[-1]
+
+          meta_path = Path("data/metadata.json")
+          if not meta_path.exists():
+              print("metadata.json not found — skipping summary.", file=sys.stderr)
+              sys.exit(0)
+
+          meta = json.loads(meta_path.read_text())
+          info = meta.get(slug, {})
+
+          lines = [
+              f"## ♻️ Manual Re-Ingest — `{slug}`\n",
+              "| Field | Value |",
+              "|---|---|",
+              f"| Scheme | {info.get('scheme_name', slug)} |",
+              f"| Scrape Date | {info.get('scrape_date', 'N/A')} |",
+              f"| Non-Noise Chunks | {info.get('chunk_count', '?')} |",
+              f"| Last Updated | {info.get('last_updated', 'N/A')} |",
+          ]
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              Path(summary_path).write_text("\n".join(lines))
+          else:
+              print("\n".join(lines))
+          PYEOF

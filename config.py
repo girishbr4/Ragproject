@@ -51,3 +51,8 @@ SCHEME_URLS = [
     "https://groww.in/mutual-funds/hdfc-large-cap-fund-direct-growth",
     "https://groww.in/mutual-funds/hdfc-elss-tax-saver-fund-direct-plan-growth",
 ]
+
+# ── Scheduler / Freshness ─────────────────────────────────────────────────────
+# How many days old can scrape_date be before the UI shows a stale-data warning?
+# Overridable via .env or GitHub Actions / Railway environment variables.
+STALE_DATA_THRESHOLD_DAYS = int(os.getenv("STALE_DATA_THRESHOLD_DAYS", "2"))
