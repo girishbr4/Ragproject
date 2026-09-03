@@ -42,14 +42,9 @@ jobs:
       - name: Install Playwright Chromium
         run: playwright install chromium --with-deps
 
-      # ── 5. Restore ChromaDB cache ────────────────────────────────────────────
-      - name: Restore ChromaDB cache
-        uses: actions/cache@v4
-        with:
-          path: vector_store/chroma_db
-          key: chroma-db-${{ runner.os }}-${{ hashFiles('data/metadata.json') }}
-          restore-keys: |
-            chroma-db-${{ runner.os }}-
+      # ── 5. ChromaDB is committed to git — no cache step needed ─────────────
+      # vector_store/chroma_db/ is tracked in the repo so the runner already
+      # has the latest DB after checkout. Actions cache removed.
 
       # ── 6. Run single-scheme ingestion ───────────────────────────────────────
       - name: Re-ingest scheme
@@ -63,13 +58,13 @@ jobs:
             python ingest_all.py --url "${{ github.event.inputs.scheme_url }}"
           fi
 
-      # ── 7. Commit metadata.json ──────────────────────────────────────────────
-      - name: Commit metadata update
+      # ── 7. Commit updated ChromaDB + metadata.json ──────────────────────────
+      - name: Commit vector store & metadata
         if: ${{ github.event.inputs.dry_run != 'true' }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/metadata.json
+          git add vector_store/chroma_db/ data/metadata.json
           git diff --cached --quiet || git commit \
             -m "chore(scheduler): manual re-ingest $(echo '${{ github.event.inputs.scheme_url }}' | sed 's|.*/||') [skip ci]"
           git push
