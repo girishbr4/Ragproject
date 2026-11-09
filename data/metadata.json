@@ -1,11 +1,11 @@
 {
   "hdfc-mid-cap-fund-direct-growth": {
     "source_url": "https://groww.in/mutual-funds/hdfc-mid-cap-fund-direct-growth",
-    "scrape_date": "2026-11-08",
+    "scrape_date": "2026-11-09",
     "chunk_count": 23,
     "scheme_name": "HDFC Mid Cap Fund Direct Growth",
     "type": "web",
-    "last_updated": "2026-11-08T08:20:26.139009Z",
+    "last_updated": "2026-11-09T08:53:20.013459Z",
     "fields_found": {
       "expense_ratio": "0.74%",
       "exit_load": "A fee payable to a mutual fund house for exiting a fund (fully or partially) before the completion of a specified period from the date of investment.",
@@ -19,29 +19,20 @@
   },
   "hdfc-small-cap-fund-direct-growth": {
     "source_url": "https://groww.in/mutual-funds/hdfc-small-cap-fund-direct-growth",
-    "scrape_date": "2026-11-08",
-    "chunk_count": 24,
-    "scheme_name": "HDFC Small Cap Fund Direct Growth",
+    "scrape_date": "2026-11-09",
+    "chunk_count": 2,
+    "scheme_name": "Welcome to Groww",
     "type": "web",
-    "last_updated": "2026-11-08T08:20:32.202898Z",
-    "fields_found": {
-      "expense_ratio": "0.79%",
-      "exit_load": "A fee payable to a mutual fund house for exiting a fund (fully or partially) before the completion of a specified period from the date of investment.",
-      "min_sip": "100",
-      "min_lumpsum": "100",
-      "risk": "Very High Risk",
-      "benchmark": "BSE 250 SmallCap Total Return Index",
-      "fund_manager": "Dhruv Muchhal",
-      "category": "Equity Small Cap"
-    }
+    "last_updated": "2026-11-09T08:53:23.563079Z",
+    "fields_found": {}
   },
   "hdfc-gold-etf-fund-of-fund-direct-plan-growth": {
     "source_url": "https://groww.in/mutual-funds/hdfc-gold-etf-fund-of-fund-direct-plan-growth",
-    "scrape_date": "2026-11-08",
+    "scrape_date": "2026-11-09",
     "chunk_count": 18,
     "scheme_name": "HDFC Gold ETF Fund of Fund Direct Plan Growth",
     "type": "web",
-    "last_updated": "2026-11-08T08:20:37.472621Z",
+    "last_updated": "2026-11-09T08:53:28.775181Z",
     "fields_found": {
       "expense_ratio": "0.20%",
       "exit_load": "A fee payable to a mutual fund house for exiting a fund (fully or partially) before the completion of a specified period from the date of investment.",
@@ -53,11 +44,11 @@
   },
   "hdfc-large-cap-fund-direct-growth": {
     "source_url": "https://groww.in/mutual-funds/hdfc-large-cap-fund-direct-growth",
-    "scrape_date": "2026-11-08",
+    "scrape_date": "2026-11-09",
     "chunk_count": 21,
     "scheme_name": "HDFC Large Cap Fund Direct Growth",
     "type": "web",
-    "last_updated": "2026-11-08T08:20:43.196589Z",
+    "last_updated": "2026-11-09T08:53:34.483101Z",
     "fields_found": {
       "expense_ratio": "1.01%",
       "exit_load": "A fee payable to a mutual fund house for exiting a fund (fully or partially) before the completion of a specified period from the date of investment.",
@@ -71,11 +62,11 @@
   },
   "hdfc-elss-tax-saver-fund-direct-plan-growth": {
     "source_url": "https://groww.in/mutual-funds/hdfc-elss-tax-saver-fund-direct-plan-growth",
-    "scrape_date": "2026-11-08",
+    "scrape_date": "2026-11-09",
     "chunk_count": 23,
     "scheme_name": "HDFC ELSS Tax Saver Fund Direct Plan Growth",
     "type": "web",
-    "last_updated": "2026-11-08T08:20:50.593397Z",
+    "last_updated": "2026-11-09T08:53:40.589486Z",
     "fields_found": {
       "expense_ratio": "1.20%",
       "exit_load": "A fee payable to a mutual fund house for exiting a fund (fully or partially) before the completion of a specified period from the date of investment.",
